@@ -230,15 +230,16 @@ jobs:
           echo "writer_az=$WRITER_AZ" >> $GITHUB_OUTPUT
           echo "reader_az=$READER_AZ" >> $GITHUB_OUTPUT
 
-      - name: Fail Writer (Force Failover)
+      - name: Fail Writer (Aurora Cluster Failover)
         run: |
-          aws rds reboot-db-instance \
-            --db-instance-identifier ${{ steps.before.outputs.writer }} \
-            --force-failover
+          echo "Triggering Aurora cluster failover..."
+          aws rds failover-db-cluster \
+            --db-cluster-identifier ${{ inputs.cluster_name }}
 
-      - name: Fail One Reader
+      - name: Fail One Reader (Simulate AZ Loss)
         run: |
-          aws rds reboot-db-instance \
+          echo "Stopping reader instance to simulate AZ failure..."
+          aws rds stop-db-instance \
             --db-instance-identifier ${{ steps.before.outputs.reader }}
 
       - name: Detect Promotion
