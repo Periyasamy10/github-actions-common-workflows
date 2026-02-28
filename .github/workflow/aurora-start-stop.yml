@@ -3,4 +3,30 @@ name: Aurora start and stop
 on:
   workflow_call:
     inputs:
-      
+      action:
+        required: true
+        type: string
+      cluster_name:
+        required: true
+        type: string
+      aws_region:
+        required: true
+        type: string
+    secrets:
+      role_to_assume:
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  aurora_control:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role_to_assume: ${{ secrets.role_to_assume }}
+          aws_region: ${{ inputs.aws_region }}
