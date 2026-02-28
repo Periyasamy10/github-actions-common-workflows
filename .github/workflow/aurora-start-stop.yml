@@ -30,3 +30,21 @@ jobs:
         with:
           role_to_assume: ${{ secrets.role_to_assume }}
           aws_region: ${{ inputs.aws_region }}
+          
+      - name: Start or Stop Cluster
+        run: |
+          if [ "${{ inputs.action }}" = "start" ]; then
+            echo "Starting cluster..."
+            aws rds start-db-cluster \
+              --db-cluster-identifier ${{ inputs.cluster_name }}
+          else
+            echo "Stopping cluster..."
+            aws rds stop-db-cluster \
+              --db-cluster-identifier ${{ inputs.cluster_name }}
+          fi
+
+      - name: Check status
+        run: |
+          aws rds describe-db-clusters \
+            --db-cluster-identifier ${{ inputs.cluster_name }} \
+            --query 'DBClusters[0].Status'
