@@ -1,0 +1,6 @@
+name: Aurora start and stop
+
+on:
+  workflow_call:
+    inputs:
+      
