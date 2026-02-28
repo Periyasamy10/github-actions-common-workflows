@@ -43,8 +43,16 @@ jobs:
               --db-cluster-identifier ${{ inputs.cluster_name }}
           fi
 
-      - name: Check status
+      - name: Wait for cluster to reach desired state
         run: |
-          aws rds describe-db-clusters \
-            --db-cluster-identifier ${{ inputs.cluster_name }} \
-            --query 'DBClusters[0].Status'
+          if [ "${{ inputs.action }}" = "start" ]; then
+            echo "Waiting for cluster to become available..."
+            aws rds wait db-cluster-available \
+              --db-cluster-identifier ${{ inputs.cluster_name }}
+            echo "Cluster is now available."
+          else
+            echo "Waiting for cluster to stop..."
+            aws rds wait db-cluster-stopped \
+              --db-cluster-identifier ${{ inputs.cluster_name }}
+            echo "Cluster is now stopped."
+          fi
