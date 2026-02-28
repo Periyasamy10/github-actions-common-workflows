@@ -201,30 +201,40 @@ jobs:
         id: before
         run: |
           CLUSTER=${{ inputs.cluster_name }}
-
+      
           WRITER=$(aws rds describe-db-clusters \
             --db-cluster-identifier $CLUSTER \
-            --query 'DBClusters[0].DBClusterMembers[?IsClusterWriter==`true`].DBInstanceIdentifier' \
-            --output text)
-
+            --query 'DBClusters[0].DBClusterMembers[*].[DBInstanceIdentifier,IsClusterWriter]' \
+            --output text | awk '$2=="True" {print $1}')
+      
           READER=$(aws rds describe-db-clusters \
             --db-cluster-identifier $CLUSTER \
-            --query 'DBClusters[0].DBClusterMembers[?IsClusterWriter==`false`][0].DBInstanceIdentifier' \
-            --output text)
-
+            --query 'DBClusters[0].DBClusterMembers[*].[DBInstanceIdentifier,IsClusterWriter]' \
+            --output text | awk '$2=="False" {print $1; exit}')
+      
+          if [ -z "$WRITER" ]; then
+            echo "No writer found!"
+            exit 1
+          fi
+      
+          if [ -z "$READER" ]; then
+            echo "No reader found! Need at least one reader."
+            exit 1
+          fi
+      
           WRITER_AZ=$(aws rds describe-db-instances \
             --db-instance-identifier $WRITER \
             --query 'DBInstances[0].AvailabilityZone' \
             --output text)
-
+      
           READER_AZ=$(aws rds describe-db-instances \
             --db-instance-identifier $READER \
             --query 'DBInstances[0].AvailabilityZone' \
             --output text)
-
+      
           echo "Writer: $WRITER ($WRITER_AZ)"
           echo "Reader to fail: $READER ($READER_AZ)"
-
+      
           echo "writer=$WRITER" >> $GITHUB_OUTPUT
           echo "reader=$READER" >> $GITHUB_OUTPUT
           echo "writer_az=$WRITER_AZ" >> $GITHUB_OUTPUT
