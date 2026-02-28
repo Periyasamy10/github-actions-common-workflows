@@ -44,43 +44,66 @@ jobs:
 
       - name: Start or Stop Cluster
         run: |
-          CURRENT_STATUS="${{ steps.status.outputs.status }}"
           ACTION="${{ inputs.action }}"
-
+          CLUSTER="${{ inputs.cluster_name }}"
+      
           echo "Requested action: $ACTION"
-          echo "Cluster status: $CURRENT_STATUS"
-
-          if [ "$ACTION" = "start" ]; then
-            if [ "$CURRENT_STATUS" = "available" ]; then
-              echo "Cluster already running. Exiting..."
-              exit 0
-            fi
-
-            echo "Starting cluster..."
-            aws rds start-db-cluster \
-              --db-cluster-identifier ${{ inputs.cluster_name }}
-
-            aws rds wait db-cluster-available \
-              --db-cluster-identifier ${{ inputs.cluster_name }}
-
-            echo "Cluster started successfully."
-
-          else
-            if [ "$CURRENT_STATUS" = "stopped" ]; then
-              echo "Cluster already stopped. Exiting..."
-              exit 0
-            fi
-
-            echo "Stopping cluster..."
-            aws rds stop-db-cluster \
-              --db-cluster-identifier ${{ inputs.cluster_name }}
-
-            aws rds wait db-cluster-stopped \
-              --db-cluster-identifier ${{ inputs.cluster_name }}
-
-            echo "Cluster stopped successfully."
+      
+          # Function to get cluster status
+          get_status () {
+            aws rds describe-db-clusters \
+              --db-cluster-identifier $CLUSTER \
+              --query 'DBClusters[0].Status' \
+              --output text
+          }
+      
+          CURRENT_STATUS=$(get_status)
+          echo "Current status: $CURRENT_STATUS"
+      
+          # Exit if already in desired state
+          if [ "$ACTION" = "start" ] && [ "$CURRENT_STATUS" = "available" ]; then
+            echo "Cluster already running. Exiting."
+            exit 0
           fi
-
+      
+          if [ "$ACTION" = "stop" ] && [ "$CURRENT_STATUS" = "stopped" ]; then
+            echo "Cluster already stopped. Exiting."
+            exit 0
+          fi
+      
+          # Trigger action
+          if [ "$ACTION" = "start" ]; then
+            echo "Starting cluster..."
+            aws rds start-db-cluster --db-cluster-identifier $CLUSTER
+            TARGET_STATE="available"
+          else
+            echo "Stopping cluster..."
+            aws rds stop-db-cluster --db-cluster-identifier $CLUSTER
+            TARGET_STATE="stopped"
+          fi
+      
+          echo "Waiting for cluster to reach state: $TARGET_STATE"
+      
+          # Wait loop with timeout (20 minutes)
+          MAX_ATTEMPTS=60   # 60 x 20s = 20 minutes
+          ATTEMPT=0
+      
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            STATUS=$(get_status)
+            echo "Current status: $STATUS"
+      
+            if [ "$STATUS" = "$TARGET_STATE" ]; then
+              echo "Cluster reached target state: $TARGET_STATE"
+              exit 0
+            fi
+      
+            sleep 20
+            ATTEMPT=$((ATTEMPT+1))
+          done
+      
+          echo "Timeout waiting for cluster to reach $TARGET_STATE"
+          exit 1
+      
       - name: Show Final Status
         run: |
           aws rds describe-db-clusters \
