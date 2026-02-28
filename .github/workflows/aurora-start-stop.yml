@@ -30,29 +30,60 @@ jobs:
         with:
           role-to-assume: ${{ secrets.role_to_assume }}
           aws-region: ${{ inputs.aws_region }}
-          
+
+      - name: Get Current Cluster Status
+        id: status
+        run: |
+          STATUS=$(aws rds describe-db-clusters \
+            --db-cluster-identifier ${{ inputs.cluster_name }} \
+            --query 'DBClusters[0].Status' \
+            --output text)
+
+          echo "Current status: $STATUS"
+          echo "status=$STATUS" >> $GITHUB_OUTPUT
+
       - name: Start or Stop Cluster
         run: |
-          if [ "${{ inputs.action }}" = "start" ]; then
+          CURRENT_STATUS="${{ steps.status.outputs.status }}"
+          ACTION="${{ inputs.action }}"
+
+          echo "Requested action: $ACTION"
+          echo "Cluster status: $CURRENT_STATUS"
+
+          if [ "$ACTION" = "start" ]; then
+            if [ "$CURRENT_STATUS" = "available" ]; then
+              echo "Cluster already running. Exiting..."
+              exit 0
+            fi
+
             echo "Starting cluster..."
             aws rds start-db-cluster \
               --db-cluster-identifier ${{ inputs.cluster_name }}
+
+            aws rds wait db-cluster-available \
+              --db-cluster-identifier ${{ inputs.cluster_name }}
+
+            echo "Cluster started successfully."
+
           else
+            if [ "$CURRENT_STATUS" = "stopped" ]; then
+              echo "Cluster already stopped. Exiting..."
+              exit 0
+            fi
+
             echo "Stopping cluster..."
             aws rds stop-db-cluster \
               --db-cluster-identifier ${{ inputs.cluster_name }}
-          fi
 
-      - name: Wait for cluster to reach desired state
-        run: |
-          if [ "${{ inputs.action }}" = "start" ]; then
-            echo "Waiting for cluster to become available..."
-            aws rds wait db-cluster-available \
-              --db-cluster-identifier ${{ inputs.cluster_name }}
-            echo "Cluster is now available."
-          else
-            echo "Waiting for cluster to stop..."
             aws rds wait db-cluster-stopped \
               --db-cluster-identifier ${{ inputs.cluster_name }}
-            echo "Cluster is now stopped."
+
+            echo "Cluster stopped successfully."
           fi
+
+      - name: Show Final Status
+        run: |
+          aws rds describe-db-clusters \
+            --db-cluster-identifier ${{ inputs.cluster_name }} \
+            --query 'DBClusters[0].Status' \
+            --output text
