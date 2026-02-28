@@ -146,9 +146,8 @@ jobs:
 
       - name: Force Failover
         run: |
-          aws rds reboot-db-instance \
-            --db-instance-identifier ${{ steps.before.outputs.writer }} \
-            --force-failover
+          aws rds failover-db-cluster \
+            --db-cluster-identifier ${{ inputs.cluster_name }}
 
       - name: Wait for Promotion
         run: |
