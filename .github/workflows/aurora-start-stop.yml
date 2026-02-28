@@ -242,6 +242,11 @@ jobs:
             --db-instance-identifier ${{ steps.before.outputs.reader }} \
             --skip-final-snapshot
 
+      - name: Wait Until Reader Deleted
+        run: |
+          aws rds wait db-instance-deleted \
+            --db-instance-identifier ${{ steps.before.outputs.reader }}
+
       - name: Trigger Aurora Failover (Writer AZ Failure)
         run: |
           echo "Triggering cluster failover..."
