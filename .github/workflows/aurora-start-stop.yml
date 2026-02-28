@@ -235,18 +235,18 @@ jobs:
           echo "writer_az=$WRITER_AZ" >> $GITHUB_OUTPUT
           echo "reader_az=$READER_AZ" >> $GITHUB_OUTPUT
   
-      - name: Trigger Aurora Failover (Writer AZ Failure)
-        run: |
-          echo "Triggering cluster failover..."
-          aws rds failover-db-cluster \
-            --db-cluster-identifier ${{ inputs.cluster_name }}
-  
       - name: Delete One Reader (Simulate Second AZ Failure)
         run: |
           echo "Deleting reader instance to simulate second AZ failure..."
           aws rds delete-db-instance \
             --db-instance-identifier ${{ steps.before.outputs.reader }} \
             --skip-final-snapshot
+
+      - name: Trigger Aurora Failover (Writer AZ Failure)
+        run: |
+          echo "Triggering cluster failover..."
+          aws rds failover-db-cluster \
+            --db-cluster-identifier ${{ inputs.cluster_name }}
   
       - name: Wait for New Writer Promotion
         run: |
