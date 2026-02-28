@@ -189,103 +189,99 @@ jobs:
   two_az_failure:
     if: inputs.action == 'two-az-failure'
     runs-on: ubuntu-latest
-
+  
     steps:
       - name: Configure AWS
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.role_to_assume }}
           aws-region: ${{ inputs.aws_region }}
-
+  
       - name: Capture Writer + Reader + AZs
         id: before
         run: |
           CLUSTER=${{ inputs.cluster_name }}
-      
+  
           WRITER=$(aws rds describe-db-clusters \
             --db-cluster-identifier $CLUSTER \
             --query 'DBClusters[0].DBClusterMembers[*].[DBInstanceIdentifier,IsClusterWriter]' \
             --output text | awk '$2=="True" {print $1}')
-      
+  
           READER=$(aws rds describe-db-clusters \
             --db-cluster-identifier $CLUSTER \
             --query 'DBClusters[0].DBClusterMembers[*].[DBInstanceIdentifier,IsClusterWriter]' \
             --output text | awk '$2=="False" {print $1; exit}')
-      
-          if [ -z "$WRITER" ]; then
-            echo "No writer found!"
+  
+          if [ -z "$WRITER" ] || [ -z "$READER" ]; then
+            echo "Cluster must have at least 1 writer and 1 reader."
             exit 1
           fi
-      
-          if [ -z "$READER" ]; then
-            echo "No reader found! Need at least one reader."
-            exit 1
-          fi
-      
+  
           WRITER_AZ=$(aws rds describe-db-instances \
             --db-instance-identifier $WRITER \
             --query 'DBInstances[0].AvailabilityZone' \
             --output text)
-      
+  
           READER_AZ=$(aws rds describe-db-instances \
             --db-instance-identifier $READER \
             --query 'DBInstances[0].AvailabilityZone' \
             --output text)
-      
+  
           echo "Writer: $WRITER ($WRITER_AZ)"
-          echo "Reader to fail: $READER ($READER_AZ)"
-      
+          echo "Reader to delete: $READER ($READER_AZ)"
+  
           echo "writer=$WRITER" >> $GITHUB_OUTPUT
           echo "reader=$READER" >> $GITHUB_OUTPUT
           echo "writer_az=$WRITER_AZ" >> $GITHUB_OUTPUT
           echo "reader_az=$READER_AZ" >> $GITHUB_OUTPUT
-
-      - name: Fail Writer (Aurora Cluster Failover)
+  
+      - name: Trigger Aurora Failover (Writer AZ Failure)
         run: |
-          echo "Triggering Aurora cluster failover..."
+          echo "Triggering cluster failover..."
           aws rds failover-db-cluster \
             --db-cluster-identifier ${{ inputs.cluster_name }}
-
-      - name: Fail One Reader (Simulate AZ Loss)
+  
+      - name: Delete One Reader (Simulate Second AZ Failure)
         run: |
-          echo "Stopping reader instance to simulate AZ failure..."
-          aws rds stop-db-instance \
-            --db-instance-identifier ${{ steps.before.outputs.reader }}
-
-      - name: Detect Promotion
+          echo "Deleting reader instance to simulate second AZ failure..."
+          aws rds delete-db-instance \
+            --db-instance-identifier ${{ steps.before.outputs.reader }} \
+            --skip-final-snapshot
+  
+      - name: Wait for New Writer Promotion
         run: |
           CLUSTER=${{ inputs.cluster_name }}
           OLD_WRITER="${{ steps.before.outputs.writer }}"
           OLD_WRITER_AZ="${{ steps.before.outputs.writer_az }}"
           FAILED_READER_AZ="${{ steps.before.outputs.reader_az }}"
-
+  
           echo "Waiting for promotion..."
-
+  
           for i in {1..40}; do
             NEW_WRITER=$(aws rds describe-db-clusters \
               --db-cluster-identifier $CLUSTER \
               --query 'DBClusters[0].DBClusterMembers[?IsClusterWriter==`true`].DBInstanceIdentifier' \
               --output text)
-
+  
             if [ "$NEW_WRITER" != "$OLD_WRITER" ]; then
               break
             fi
-
+  
             sleep 10
           done
-
+  
+          if [ "$NEW_WRITER" = "$OLD_WRITER" ]; then
+            echo "Failover did NOT occur!"
+            exit 1
+          fi
+  
           NEW_AZ=$(aws rds describe-db-instances \
             --db-instance-identifier $NEW_WRITER \
             --query 'DBInstances[0].AvailabilityZone' \
             --output text)
-
+  
           echo ""
           echo "❌ Failed Writer AZ: $OLD_WRITER_AZ"
           echo "❌ Failed Reader AZ: $FAILED_READER_AZ"
           echo "✅ Promoted Writer AZ: $NEW_AZ"
           echo "New Writer Instance: $NEW_WRITER"
-
-          if [ "$NEW_WRITER" = "$OLD_WRITER" ]; then
-            echo "Failover did NOT occur!"
-            exit 1
-          fi
