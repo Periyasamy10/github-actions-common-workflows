@@ -21,7 +21,8 @@ permissions:
   contents: read
 
 jobs:
-  aurora_control:
+  start_stop:
+    if: inputs.action == 'start' || inputs.action == 'stop'
     runs-on: ubuntu-latest
 
     steps:
@@ -110,3 +111,171 @@ jobs:
             --db-cluster-identifier ${{ inputs.cluster_name }} \
             --query 'DBClusters[0].Status' \
             --output text
+  
+  single_az_failure:
+    if: inputs.action == 'single-az-failure'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.role_to_assume }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Capture Current Writer + AZ
+        id: before
+        run: |
+          CLUSTER=${{ inputs.cluster_name }}
+
+          WRITER=$(aws rds describe-db-clusters \
+            --db-cluster-identifier $CLUSTER \
+            --query 'DBClusters[0].DBClusterMembers[?IsClusterWriter==`true`].DBInstanceIdentifier' \
+            --output text)
+
+          AZ=$(aws rds describe-db-instances \
+            --db-instance-identifier $WRITER \
+            --query 'DBInstances[0].AvailabilityZone' \
+            --output text)
+
+          echo "Current writer: $WRITER"
+          echo "Current writer AZ: $AZ"
+
+          echo "writer=$WRITER" >> $GITHUB_OUTPUT
+          echo "az=$AZ" >> $GITHUB_OUTPUT
+
+      - name: Force Failover
+        run: |
+          aws rds reboot-db-instance \
+            --db-instance-identifier ${{ steps.before.outputs.writer }} \
+            --force-failover
+
+      - name: Wait for Promotion
+        run: |
+          CLUSTER=${{ inputs.cluster_name }}
+          OLD_WRITER="${{ steps.before.outputs.writer }}"
+          OLD_AZ="${{ steps.before.outputs.az }}"
+
+          echo "Waiting for new writer..."
+
+          for i in {1..30}; do
+            NEW_WRITER=$(aws rds describe-db-clusters \
+              --db-cluster-identifier $CLUSTER \
+              --query 'DBClusters[0].DBClusterMembers[?IsClusterWriter==`true`].DBInstanceIdentifier' \
+              --output text)
+
+            if [ "$NEW_WRITER" != "$OLD_WRITER" ]; then
+              break
+            fi
+
+            sleep 10
+          done
+
+          NEW_AZ=$(aws rds describe-db-instances \
+            --db-instance-identifier $NEW_WRITER \
+            --query 'DBInstances[0].AvailabilityZone' \
+            --output text)
+
+          echo ""
+          echo "❌ Failed AZ: $OLD_AZ"
+          echo "✅ Promoted AZ: $NEW_AZ"
+          echo "Old Writer: $OLD_WRITER"
+          echo "New Writer: $NEW_WRITER"
+
+          if [ "$NEW_WRITER" = "$OLD_WRITER" ]; then
+            echo "Failover did NOT occur!"
+            exit 1
+          fi
+
+  two_az_failure:
+    if: inputs.action == 'two-az-failure'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.role_to_assume }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Capture Writer + Reader + AZs
+        id: before
+        run: |
+          CLUSTER=${{ inputs.cluster_name }}
+
+          WRITER=$(aws rds describe-db-clusters \
+            --db-cluster-identifier $CLUSTER \
+            --query 'DBClusters[0].DBClusterMembers[?IsClusterWriter==`true`].DBInstanceIdentifier' \
+            --output text)
+
+          READER=$(aws rds describe-db-clusters \
+            --db-cluster-identifier $CLUSTER \
+            --query 'DBClusters[0].DBClusterMembers[?IsClusterWriter==`false`][0].DBInstanceIdentifier' \
+            --output text)
+
+          WRITER_AZ=$(aws rds describe-db-instances \
+            --db-instance-identifier $WRITER \
+            --query 'DBInstances[0].AvailabilityZone' \
+            --output text)
+
+          READER_AZ=$(aws rds describe-db-instances \
+            --db-instance-identifier $READER \
+            --query 'DBInstances[0].AvailabilityZone' \
+            --output text)
+
+          echo "Writer: $WRITER ($WRITER_AZ)"
+          echo "Reader to fail: $READER ($READER_AZ)"
+
+          echo "writer=$WRITER" >> $GITHUB_OUTPUT
+          echo "reader=$READER" >> $GITHUB_OUTPUT
+          echo "writer_az=$WRITER_AZ" >> $GITHUB_OUTPUT
+          echo "reader_az=$READER_AZ" >> $GITHUB_OUTPUT
+
+      - name: Fail Writer (Force Failover)
+        run: |
+          aws rds reboot-db-instance \
+            --db-instance-identifier ${{ steps.before.outputs.writer }} \
+            --force-failover
+
+      - name: Fail One Reader
+        run: |
+          aws rds reboot-db-instance \
+            --db-instance-identifier ${{ steps.before.outputs.reader }}
+
+      - name: Detect Promotion
+        run: |
+          CLUSTER=${{ inputs.cluster_name }}
+          OLD_WRITER="${{ steps.before.outputs.writer }}"
+          OLD_WRITER_AZ="${{ steps.before.outputs.writer_az }}"
+          FAILED_READER_AZ="${{ steps.before.outputs.reader_az }}"
+
+          echo "Waiting for promotion..."
+
+          for i in {1..40}; do
+            NEW_WRITER=$(aws rds describe-db-clusters \
+              --db-cluster-identifier $CLUSTER \
+              --query 'DBClusters[0].DBClusterMembers[?IsClusterWriter==`true`].DBInstanceIdentifier' \
+              --output text)
+
+            if [ "$NEW_WRITER" != "$OLD_WRITER" ]; then
+              break
+            fi
+
+            sleep 10
+          done
+
+          NEW_AZ=$(aws rds describe-db-instances \
+            --db-instance-identifier $NEW_WRITER \
+            --query 'DBInstances[0].AvailabilityZone' \
+            --output text)
+
+          echo ""
+          echo "❌ Failed Writer AZ: $OLD_WRITER_AZ"
+          echo "❌ Failed Reader AZ: $FAILED_READER_AZ"
+          echo "✅ Promoted Writer AZ: $NEW_AZ"
+          echo "New Writer Instance: $NEW_WRITER"
+
+          if [ "$NEW_WRITER" = "$OLD_WRITER" ]; then
+            echo "Failover did NOT occur!"
+            exit 1
+          fi
